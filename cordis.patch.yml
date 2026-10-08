@@ -1,0 +1,7 @@
+# Mount the self-contained quota meter. It owns its own host transport (exact
+# Fetch routes on the shared `/api` channel) and its own browser half, so it
+# needs no experimental bundle and nothing from the harness but the Connection
+# carrier, the credentials store and the composer slots.
+- insert:
+    - id: usage-meter
+      name: 'dsh-usage-meter'

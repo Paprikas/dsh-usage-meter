@@ -10,7 +10,7 @@ It answers for the providers whose quota the harness never surfaces:
 | Provider | Source | What it shows |
 | --- | --- | --- |
 | **OpenAI Codex** | `GET https://chatgpt.com/backend-api/wham/usage` | both plan windows (5-hour and weekly) as the share left, their reset countdowns, the plan name, the extra limit resets, and any model currently out of quota |
-| **Google Gemini (AI Pro)** | `POST https://daily-cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels` | the remaining quota percentage and reset countdown for Gemini models (Flash & Pro) as well as third-party subscription models (Claude & GPT-OSS) |
+| **Google Gemini (AI Pro)** | `POST https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuota` | independent remaining quota percentages and reset countdowns for Gemini (Flash & Pro), Argon, and third-party subscription models (Claude & GPT-OSS) |
 | **OpenRouter** | `GET https://openrouter.ai/api/v1/credits` | the prepaid balance out of the total |
 | **DeepSeek** | the harness's own `deepseekAccount` service | the recharge wallet and every granted bonus wallet |
 
@@ -18,6 +18,8 @@ The harness talks to the Codex backend with the same OAuth grant but only ever
 learns a quota *failure* from a response — it never asks how much is left. The
 answer lives behind the Codex backend's own usage endpoint, which this plugin
 calls with the access token the credentials service already holds.
+
+Google quota requests use `antigravity/hub/2.23.0 darwin/arm64`; older client versions hide Argon buckets. Quotas are read from the daily generation backend, never substituted with the production backend's different pools. Each bucket's explicit `remainingFraction` and `resetTime` stay together; absent or invalid Argon data is not guessed from Flash or Claude.
 
 ## What you see
 
@@ -50,7 +52,7 @@ A full-width row in the foot of the sidebar, directly above Settings:
 - if nothing at all is configured, the row is not drawn — an empty quota row
   beside Settings would say nothing.
 
-**Hovering** the row opens a panel with everything, in three equal groups — one
+**Hovering** the row opens a panel with everything, in four equal groups — one
 per provider, each with the same caption and the same rows, none promoted over
 the others:
 
@@ -59,6 +61,10 @@ the others:
   because that is the one you can plan around, and how far off it is right after;
   plus the number of extra limit resets and, only when it happens, that a limit
   was reached;
+- **Google Gemini (AI Pro)**: separate `Gemini (Flash & Pro)`, `Argon`, and
+  `Claude (Opus, Sonnet) & GPT-OSS` windows, each with its own remaining quota,
+  bar, and reset countdown. Older snapshots without Argon simply omit that window;
+  the sidebar and Plugins summary continue to show the Flash & Pro quota;
 - **OpenRouter credits**: the balance out of the total, and what was spent;
 - **DeepSeek balance**: every wallet under its own name, empties included.
 

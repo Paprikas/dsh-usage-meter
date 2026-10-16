@@ -61,23 +61,12 @@ const CODEX_BODY = {
   rate_limit_reset_credits: { available_count: 4 },
 }
 
-const GOOGLE_MODELS_BODY = {
-  models: {
-    'gemini-3.1-pro-high': {
-      displayName: 'Gemini 3.1 Pro (High)',
-      quotaInfo: {
-        remainingFraction: 0.85,
-        resetTime: '2026-10-08T18:37:35Z',
-      },
-    },
-    'claude-sonnet-5-5-high': {
-      displayName: 'Claude Sonnet 5.5 (High)',
-      quotaInfo: {
-        remainingFraction: 0.95,
-        resetTime: '2026-10-08T20:31:33Z',
-      },
-    },
-  },
+const GOOGLE_QUOTA_BODY = {
+  buckets: [
+    { modelId: 'gemini-4-argon-high', remainingFraction: 0.24, resetTime: '2026-10-22T23:51:02Z', tokenType: 'WTUS' },
+    { modelId: 'gemini-3.8-flash-high', remainingFraction: 0.85, resetTime: '2026-10-08T18:37:35Z', tokenType: 'WTUS' },
+    { modelId: 'claude-sonnet-5-5-high', remainingFraction: 0.95, resetTime: '2026-10-08T20:31:33Z', tokenType: 'WTUS' },
+  ],
 }
 
 /**
@@ -115,9 +104,9 @@ function stubFetch({ codexStatus = 200, openrouterStatus = 200, geminiStatus = 2
         headers: { 'content-type': 'application/json' },
       })
     }
-    if (href.includes('/v1internal:fetchAvailableModels')) {
+    if (href.includes('/v1internal:retrieveUserQuota')) {
       if (geminiStatus !== 200) return new Response('nope', { status: geminiStatus })
-      return new Response(JSON.stringify(GOOGLE_MODELS_BODY), { status: 200, headers: { 'content-type': 'application/json' } })
+      return new Response(JSON.stringify(GOOGLE_QUOTA_BODY), { status: 200, headers: { 'content-type': 'application/json' } })
     }
     throw new Error(`unexpected request to ${href}`)
   }
@@ -262,6 +251,11 @@ function state() {
   assert.equal(snapshot.errors.gemini, null, 'the Gemini call succeeded')
   assert.equal(snapshot.gemini.gemini.remainingPercent, 85, 'Gemini remaining percentage parsed')
   assert.equal(snapshot.gemini.claude.remainingPercent, 95, 'Claude remaining percentage parsed')
+  assert.equal(snapshot.gemini.argon.remainingPercent, 24, 'Argon is independent even when returned first')
+  assert.equal(snapshot.gemini.argon.resetAt, Date.parse('2026-10-22T23:51:02Z'), 'Argon keeps its own reset')
+  const google = net.calls.find((call) => call.href.includes('/v1internal:retrieveUserQuota'))
+  assert.equal(google.init.headers['user-agent'], 'antigravity/hub/2.23.0 darwin/arm64', 'Hub version exposes Argon metadata')
+  assert.ok(google.href.startsWith('https://daily-cloudcode-pa.googleapis.com/'), 'quota uses the generation backend, not production')
 
   assert.equal(snapshot.codex.plan, 'plus', 'the plan comes through')
   assert.equal(snapshot.codex.limitReached, true, 'an exhausted plan is reported as such')
@@ -292,7 +286,7 @@ function state() {
   assert.ok(snapshot.deepseekFetchedAt > 0, 'the wallet read carries its own timestamp')
   assert.deepEqual(
     account.seen[0],
-    { version: 'dsh-usage-meter@0.6.1', locale: 'ru-RU', timezoneOffsetSeconds: 10800 },
+    { version: 'dsh-usage-meter@0.6.2', locale: 'ru-RU', timezoneOffsetSeconds: 10800 },
     'Platform is told the requesting UI, not the host process',
   )
 
@@ -303,6 +297,44 @@ function state() {
   assert.equal(credits.init.headers.authorization, 'Bearer sk-or-test', 'the OpenRouter key authorizes its call')
 
   for (const dispose of disposers) dispose()
+}
+
+// --- Argon quotas never contaminate the other Google pools ----------------
+{
+  const original = GOOGLE_QUOTA_BODY.buckets
+  const variants = [
+    { buckets: [...original, { modelId: 'gemini-4-argon-low', remainingFraction: 0, resetTime: '2026-10-22T23:51:02Z' }], argon: 0 },
+    { buckets: [...original].reverse(), argon: 24 },
+    { buckets: original.filter((bucket) => !bucket.modelId.includes('argon')), argon: null },
+    { buckets: [{ modelId: 'gemini-4-argon-high', resetTime: '2026-10-22T23:51:02Z' }, ...original.slice(1)], argon: null },
+    { buckets: [original[0]], argon: 24, onlyArgon: true },
+  ]
+  try {
+    for (const variant of variants) {
+      GOOGLE_QUOTA_BODY.buckets = variant.buckets
+      const { handler, disposers } = mount({ credentials: credentialsStore(), account: deepseekAccount(DEEPSEEK_READY) })
+      const net = stubFetch()
+      let result
+      try {
+        result = await handler('usage', { force: true })
+      } finally {
+        net.restore()
+        for (const dispose of disposers) dispose()
+      }
+      assert.equal(result.ok, true)
+      const { gemini, errors } = result.value.snapshot
+      assert.equal(errors.gemini, null)
+      assert.equal(gemini.argon?.remainingPercent ?? null, variant.argon)
+      assert.equal(gemini.gemini?.remainingPercent ?? null, variant.onlyArgon ? null : 85)
+      assert.equal(gemini.claude?.remainingPercent ?? null, variant.onlyArgon ? null : 95)
+      if (variant.argon === 0) {
+        assert.equal(gemini.argon.limitReached, true)
+        assert.equal(gemini.argon.resetAt, Date.parse('2026-10-22T23:51:02Z'))
+      }
+    }
+  } finally {
+    GOOGLE_QUOTA_BODY.buckets = original
+  }
 }
 
 // --- a provider that is switched off is never read ------------------------
@@ -577,7 +609,7 @@ for (const [label, result] of [
 // --- the state file is the activation breadcrumb ----------------------------
 {
   const recorded = state()
-  assert.equal(recorded.hostVersion, '0.6.1', 'the state file carries the plugin version')
+  assert.equal(recorded.hostVersion, '0.6.2', 'the state file carries the plugin version')
   assert.ok(recorded.imported, 'the module-evaluation stage is recorded')
   assert.ok(recorded.applied, 'the applied stage is recorded')
   assert.ok(recorded.injected, 'the injected stage is recorded')

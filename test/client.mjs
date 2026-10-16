@@ -128,6 +128,7 @@ const SNAPSHOT = {
   },
   gemini: {
     gemini: { key: 'gemini', remainingPercent: 85, usedPercent: 15, windowSeconds: 86400, resetAt: NOW + 120 * 60_000, resetAfterSeconds: 7200 },
+    argon: { key: 'argon', remainingPercent: 40, usedPercent: 60, windowSeconds: 86400, resetAt: NOW + 240 * 60_000, resetAfterSeconds: 14400 },
     claude: { key: 'claude', remainingPercent: 95, usedPercent: 5, windowSeconds: 86400, resetAt: NOW + 180 * 60_000, resetAfterSeconds: 10800 },
   },
   errors: { codex: null, openrouter: null, deepseek: null, gemini: null },
@@ -324,6 +325,32 @@ const panel = () => globalThis.document.querySelector('.um_panel')
   assert.match(body, /Gemini \(Flash & Pro\)/, 'the Gemini window is named')
   assert.match(body, /85% left/, 'the Gemini window says what is left')
   assert.match(body, /Claude \(Opus, Sonnet\) & GPT-OSS/, 'the third-party window is named with Opus')
+  const windows = [...opened.querySelectorAll('.um_meterBody')]
+  assert.deepEqual(
+    windows.map((row) => [row.querySelector('dt').textContent, row.querySelector('dd').textContent]),
+    [
+      ['5h', '95% left'],
+      ['weekly', '34% left'],
+      ['Gemini (Flash & Pro)', '85% left'],
+      ['Argon', '40% left'],
+      ['Claude (Opus, Sonnet) & GPT-OSS', '95% left'],
+    ],
+    'all five quota windows retain their own title and remaining percentage',
+  )
+  assert.deepEqual(
+    windows.map((row) => row.querySelector('.um_segment').style.width),
+    ['5%', '66%', '15%', '60%', '5%'],
+    'each window has its own used bar rather than sharing the Gemini quota',
+  )
+  const geminiResets = [SNAPSHOT.gemini.gemini, SNAPSHOT.gemini.argon, SNAPSHOT.gemini.claude]
+  for (const [index, quota] of geminiResets.entries()) {
+    const note = windows[index + 2].querySelector('.um_note').textContent
+    assert.equal(
+      note,
+      `Resets ${internals.clockOf(quota.resetAt)} · in ${internals.humanDuration(quota.resetAt - NOW, t)}`,
+      'each Gemini quota window keeps its own absolute reset and countdown',
+    )
+  }
   assert.ok(opened.querySelector('button.um_refresh'), 'the panel provides a manual refresh button beside the timestamp')
   // The providers are peers: one caption style, no lamp, no bold header.
   const captions = [...opened.querySelectorAll('.um_caption')]
@@ -344,6 +371,49 @@ const panel = () => globalThis.document.querySelector('.um_panel')
 
   await view.unmount()
   opened.remove()
+}
+
+// --- older snapshots omit Argon without changing the other windows ---------
+for (const argon of [undefined, null]) {
+  const { argon: _argon, ...legacyGemini } = SNAPSHOT.gemini
+  fakeConnection({ ...SNAPSHOT, gemini: argon === undefined ? legacyGemini : { ...legacyGemini, argon } })
+  const view = await mount(internals.UsageMeter, { wide: true, t })
+  await settle(view.act)
+  await click(view.act, view.container.querySelector('.um_badge'))
+
+  const group = [...panel().querySelectorAll('.um_group')].find((node) =>
+    node.querySelector('.um_caption')?.textContent === 'Google Gemini (AI Pro)',
+  )
+  assert.deepEqual(
+    [...group.querySelectorAll('.um_meterBody')].map((row) => [row.querySelector('dt').textContent, row.querySelector('dd').textContent]),
+    [['Gemini (Flash & Pro)', '85% left'], ['Claude (Opus, Sonnet) & GPT-OSS', '95% left']],
+    'missing or null Argon adds no placeholder and leaves the existing quotas intact',
+  )
+  await view.unmount()
+}
+
+// --- an exhausted Argon does not exhaust Flash/Pro or third-party models ----
+{
+  fakeConnection({
+    ...SNAPSHOT,
+    gemini: { ...SNAPSHOT.gemini, argon: { ...SNAPSHOT.gemini.argon, remainingPercent: 0, usedPercent: 100, limitReached: true } },
+  })
+  const view = await mount(internals.UsageMeter, { wide: true, t })
+  await settle(view.act)
+  await click(view.act, view.container.querySelector('.um_badge'))
+
+  const rows = [...panel().querySelectorAll('.um_meterBody')]
+  const argon = rows.find((row) => row.querySelector('dt').textContent === 'Argon')
+  assert.equal(argon.querySelector('dd').textContent, 'Limit reached · 0%', 'Argon reports its own exhaustion')
+  assert.equal(argon.querySelector('.um_segment').className, 'um_segment is-error', 'only its bar turns exhausted')
+  assert.equal(argon.querySelector('.um_segment').style.width, '100%', 'Argon is fully used')
+  for (const title of ['Gemini (Flash & Pro)', 'Claude (Opus, Sonnet) & GPT-OSS']) {
+    const row = rows.find((node) => node.querySelector('dt').textContent === title)
+    assert.equal(row.querySelector('.um_segment').className, 'um_segment is-ok', 'the other Gemini windows stay healthy')
+    assert.match(row.querySelector('dd').textContent, /% left$/, 'the other quotas remain available')
+  }
+  assert.equal(view.container.querySelectorAll('.um_figure')[1].textContent, '85%', 'the sidebar still summarizes Flash/Pro')
+  await view.unmount()
 }
 
 // --- a click pins the panel ------------------------------------------------

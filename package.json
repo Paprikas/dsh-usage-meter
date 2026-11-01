@@ -1,8 +1,8 @@
 {
   "name": "dsh-usage-meter",
-  "version": "0.6.2",
+  "version": "0.7.0",
   "private": true,
-  "description": "Plan and credit meter in the DeepSeek Harness sidebar foot — Codex windows, OpenRouter balance and DeepSeek wallets — with a Plugins page to choose which providers to show",
+  "description": "Plan and credit meter in the DeepSeek Harness sidebar foot — Codex windows, OpenRouter balance, DeepSeek wallets, Gemini and Z.ai — with a Plugins page to choose which providers to show",
   "type": "module",
   "main": "lib/index.js",
   "exports": {

@@ -69,13 +69,26 @@ const GOOGLE_QUOTA_BODY = {
   ],
 }
 
+const ZAI_QUOTA_BODY = {
+  code: 200,
+  msg: 'Operation successful',
+  data: {
+    limits: [
+      { type: 'CREDIT_LIMIT', unit: 3, number: 5, usage: 2000, currentValue: 0, remaining: 2000, percentage: 0 },
+      { type: 'CREDIT_LIMIT', unit: 6, number: 1, usage: 10000, currentValue: 10006, remaining: 0, percentage: 100, nextResetTime: 1793815866997 },
+    ],
+    level: 'lite',
+  },
+  success: true,
+}
+
 /**
  * A stubbed global fetch that records every call and answers the provider
  * endpoints plus token endpoints.
- * @param options - `codexStatus`, `openrouterStatus`, `geminiStatus`.
+ * @param options - `codexStatus`, `openrouterStatus`, `geminiStatus`, `zaiStatus`.
  * @returns the recorded calls and a restore function.
  */
-function stubFetch({ codexStatus = 200, openrouterStatus = 200, geminiStatus = 200 } = {}) {
+function stubFetch({ codexStatus = 200, openrouterStatus = 200, geminiStatus = 200, zaiStatus = 200 } = {}) {
   const calls = []
   const original = globalThis.fetch
   globalThis.fetch = async (url, init = {}) => {
@@ -108,13 +121,17 @@ function stubFetch({ codexStatus = 200, openrouterStatus = 200, geminiStatus = 2
       if (geminiStatus !== 200) return new Response('nope', { status: geminiStatus })
       return new Response(JSON.stringify(GOOGLE_QUOTA_BODY), { status: 200, headers: { 'content-type': 'application/json' } })
     }
+    if (href.includes('/api/monitor/usage/quota/limit')) {
+      if (zaiStatus !== 200) return new Response('nope', { status: zaiStatus })
+      return new Response(JSON.stringify(ZAI_QUOTA_BODY), { status: 200, headers: { 'content-type': 'application/json' } })
+    }
     throw new Error(`unexpected request to ${href}`)
   }
   return { calls, restore: () => { globalThis.fetch = original } }
 }
 
 /** A credentials store backed by one record and one plain reference. `record: null` means "no grant stored". */
-function credentialsStore({ record = LIVE_GRANT, key = 'llm-pi-ai/openai-codex', openrouterKey = 'sk-or-test' } = {}) {
+function credentialsStore({ record = LIVE_GRANT, key = 'llm-pi-ai/openai-codex', openrouterKey = 'sk-or-test', zaiKey = 'test-zai-key' } = {}) {
   const records = new Map()
   if (record != null) records.set(key, record)
   const writes = []
@@ -122,8 +139,9 @@ function credentialsStore({ record = LIVE_GRANT, key = 'llm-pi-ai/openai-codex',
     writes,
     records,
     async resolve(ref) {
-      if (ref !== 'OPENROUTER_API_KEY' || openrouterKey === void 0) return void 0
-      return { value: openrouterKey, source: 'file' }
+      if (ref === 'OPENROUTER_API_KEY') return openrouterKey !== void 0 ? { value: openrouterKey, source: 'file' } : void 0
+      if (ref === 'ZAI_CODING_PLAN_KEY' || ref === 'ZAI_API_KEY') return zaiKey !== void 0 ? { value: zaiKey, source: 'file' } : void 0
+      return void 0
     },
     async readRecord(requested) {
       return records.get(requested)
@@ -249,6 +267,12 @@ function state() {
   assert.equal(snapshot.errors.openrouter, null, 'the OpenRouter call succeeded')
   assert.equal(snapshot.errors.deepseek, null, 'the DeepSeek call succeeded')
   assert.equal(snapshot.errors.gemini, null, 'the Gemini call succeeded')
+  assert.equal(snapshot.errors.zai, null, 'the Z.ai call succeeded')
+  assert.equal(snapshot.zai.plan, 'lite', 'Z.ai plan parsed')
+  assert.equal(snapshot.zai.limitReached, true, 'Z.ai limit reached parsed')
+  assert.equal(snapshot.zai.windows.length, 2, 'both Z.ai windows parsed')
+  assert.equal(snapshot.zai.windows[0].remainingPercent, 100, 'Z.ai 5h remaining percentage parsed')
+  assert.equal(snapshot.zai.windows[1].remainingPercent, 0, 'Z.ai monthly remaining percentage parsed')
   assert.equal(snapshot.gemini.gemini.remainingPercent, 85, 'Gemini remaining percentage parsed')
   assert.equal(snapshot.gemini.claude.remainingPercent, 95, 'Claude remaining percentage parsed')
   assert.equal(snapshot.gemini.argon.remainingPercent, 24, 'Argon is independent even when returned first')
@@ -286,7 +310,7 @@ function state() {
   assert.ok(snapshot.deepseekFetchedAt > 0, 'the wallet read carries its own timestamp')
   assert.deepEqual(
     account.seen[0],
-    { version: 'dsh-usage-meter@0.6.2', locale: 'ru-RU', timezoneOffsetSeconds: 10800 },
+    { version: 'dsh-usage-meter@0.7.0', locale: 'ru-RU', timezoneOffsetSeconds: 10800 },
     'Platform is told the requesting UI, not the host process',
   )
 
@@ -347,7 +371,7 @@ function state() {
   const chosen = await handler('preferences', { visible: { openrouter: false } })
   net.restore()
   assert.equal(chosen.ok, true, 'the preference is accepted')
-  assert.deepEqual(chosen.value.visible, { codex: true, openrouter: false, deepseek: true, gemini: true }, 'and answered in full')
+  assert.deepEqual(chosen.value.visible, { codex: true, openrouter: false, deepseek: true, gemini: true, zai: true }, 'and answered in full')
 
   const net2 = stubFetch()
   const snapshot = (await handler('usage', { force: true })).value.snapshot
@@ -363,7 +387,7 @@ function state() {
   )
   assert.ok(snapshot.codex !== null, 'the providers left on are unaffected')
   assert.ok(snapshot.deepseek !== null, 'all of them')
-  assert.deepEqual(snapshot.visible, { codex: true, openrouter: false, deepseek: true, gemini: true }, 'the snapshot carries the choice')
+  assert.deepEqual(snapshot.visible, { codex: true, openrouter: false, deepseek: true, gemini: true, zai: true }, 'the snapshot carries the choice')
 
   for (const dispose of disposers) dispose()
 }
@@ -609,7 +633,7 @@ for (const [label, result] of [
 // --- the state file is the activation breadcrumb ----------------------------
 {
   const recorded = state()
-  assert.equal(recorded.hostVersion, '0.6.2', 'the state file carries the plugin version')
+  assert.equal(recorded.hostVersion, '0.7.0', 'the state file carries the plugin version')
   assert.ok(recorded.imported, 'the module-evaluation stage is recorded')
   assert.ok(recorded.applied, 'the applied stage is recorded')
   assert.ok(recorded.injected, 'the injected stage is recorded')

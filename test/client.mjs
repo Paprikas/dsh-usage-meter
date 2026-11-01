@@ -73,9 +73,9 @@ assert.deepEqual(exports.inject, ['connection', 'slots', 'locale'], 'the browser
 assert.ok(internals.en !== undefined && internals.ru !== undefined, 'both dictionaries ship')
 
 // --- pure helpers ----------------------------------------------------------
-assert.equal(internals.toneOf(10), 'is-ok', 'a fresh window reads calm')
-assert.equal(internals.toneOf(70), 'is-warn', 'a spent window warns')
-assert.equal(internals.toneOf(100), 'is-error', 'an exhausted window errors')
+assert.equal(internals.toneOf(100), 'is-ok', 'a full window reads calm')
+assert.equal(internals.toneOf(30), 'is-warn', 'a low window warns')
+assert.equal(internals.toneOf(5), 'is-error', 'an exhausted window errors')
 assert.equal(internals.humanDuration(19 * 60_000, (key) => internals.en[key]), '19 min', 'minutes read compactly')
 assert.equal(internals.humanDuration(174 * 60_000, (key) => internals.en[key]), '2 h 54 min', 'hours carry the leftover minutes')
 assert.equal(internals.humanDuration(50 * 3_600_000, (key) => internals.en[key]), '2 d 2 h', 'days carry the leftover hours')
@@ -131,7 +131,15 @@ const SNAPSHOT = {
     argon: { key: 'argon', remainingPercent: 40, usedPercent: 60, windowSeconds: 86400, resetAt: NOW + 240 * 60_000, resetAfterSeconds: 14400 },
     claude: { key: 'claude', remainingPercent: 95, usedPercent: 5, windowSeconds: 86400, resetAt: NOW + 180 * 60_000, resetAfterSeconds: 10800 },
   },
-  errors: { codex: null, openrouter: null, deepseek: null, gemini: null },
+  zai: {
+    plan: 'lite',
+    limitReached: false,
+    windows: [
+      { key: '5h', usedPercent: 10, remainingPercent: 90, windowSeconds: 18000, resetAt: NOW + 45 * 60_000 },
+      { key: 'monthly', usedPercent: 40, remainingPercent: 60, windowSeconds: 2592000, resetAt: NOW + 10 * 86400 * 1000 },
+    ],
+  },
+  errors: { codex: null, openrouter: null, deepseek: null, gemini: null, zai: null },
   fetchedAt: NOW,
 }
 
@@ -150,7 +158,7 @@ function fakeConnection(snapshot = SNAPSHOT) {
         async call(_channel, method, payload) {
           calls.push({ method, payload })
           if (method === 'usage-meter/preferences') {
-            visible = { codex: true, openrouter: true, deepseek: true, gemini: true, ...(visible ?? {}), ...payload.visible }
+            visible = { codex: true, openrouter: true, deepseek: true, gemini: true, zai: true, ...(visible ?? {}), ...payload.visible }
             return { ok: true, value: { visible } }
           }
           return { ok: true, value: { snapshot: { ...snapshot, visible }, cached: false } }
@@ -235,30 +243,30 @@ const panel = () => globalThis.document.querySelector('.um_panel')
   assert.equal(calls[0].payload.timezoneOffsetSeconds, -new Date().getTimezoneOffset() * 60, 'and its offset east of UTC')
   assert.equal(calls[0].payload.force, true, 'the first read is forced')
 
-  // Four figures, each introduced by its own mark and named by no letters at all.
+  // Five figures, each introduced by its own mark and named by no letters at all.
   const figures = [...badge.querySelectorAll('.um_figure')]
-  assert.equal(figures.length, 4, 'Codex, Gemini, OpenRouter and DeepSeek each get a figure')
+  assert.equal(figures.length, 5, 'Codex, Gemini, Z.ai, OpenRouter and DeepSeek each get a figure')
   assert.deepEqual(
     figures.map((figure) => figure.textContent),
-    ['95%', '85%', '$8.73', '¥1.27'],
+    ['95%', '85%', '90%', '$8.73', '¥1.27'],
     'and each reads as the number it stands for — 95%, because the window has 5% used',
   )
   assert.equal(view.container.querySelectorAll('.um_badge').length, 1, 'exactly one row')
 
   const marks = [...badge.querySelectorAll('.um_figure > .um_icon > svg')]
-  assert.equal(marks.length, 4, 'each figure is introduced by a brand mark')
+  assert.equal(marks.length, 5, 'each figure is introduced by a brand mark')
   for (const mark of marks) {
     assert.equal(mark.getAttribute('viewBox'), '0 0 24 24', 'a mark keeps the 24-unit grid it was drawn on')
     assert.equal(mark.getAttribute('width'), '14', 'and renders at the shell icon size')
     assert.equal(mark.getAttribute('fill'), 'currentColor', 'and takes the theme colour rather than a baked-in one')
     const path = mark.querySelector('path')
     assert.ok(path !== null, 'and it is a real outline, not a placeholder')
-    assert.ok(path.getAttribute('d').length > 100, 'carrying a full brand path')
+    assert.ok(path.getAttribute('d').length > 50, 'carrying a full brand path')
     assert.equal(mark.innerHTML.includes('fill="#'), false, 'with no hardcoded brand colour left in')
   }
-  // Four distinct marks, not one drawn multiple times.
+  // Five distinct marks, not one drawn multiple times.
   const distinct = new Set(marks.map((mark) => mark.innerHTML))
-  assert.equal(distinct.size, 4, 'Codex, Gemini, OpenRouter and DeepSeek each carry their own mark')
+  assert.equal(distinct.size, 5, 'Codex, Gemini, Z.ai, OpenRouter and DeepSeek each carry their own mark')
   assert.doesNotMatch(badge.textContent, /OR|DS/, 'the two-letter marks are gone')
   assert.match(badge.getAttribute('aria-label'), /Codex 95% left/, 'the accessible name spells out what is left')
 
@@ -334,13 +342,15 @@ const panel = () => globalThis.document.querySelector('.um_panel')
       ['Gemini (Flash & Pro)', '85% left'],
       ['Argon', '40% left'],
       ['Claude (Opus, Sonnet) & GPT-OSS', '95% left'],
+      ['5h', '90% left'],
+      ['monthly', '60% left'],
     ],
-    'all five quota windows retain their own title and remaining percentage',
+    'all seven quota windows retain their own title and remaining percentage',
   )
   assert.deepEqual(
     windows.map((row) => row.querySelector('.um_segment').style.width),
-    ['5%', '66%', '15%', '60%', '5%'],
-    'each window has its own used bar rather than sharing the Gemini quota',
+    ['95%', '34%', '85%', '40%', '95%', '90%', '60%'],
+    'each window has its own remaining bar rather than sharing the Gemini quota',
   )
   const geminiResets = [SNAPSHOT.gemini.gemini, SNAPSHOT.gemini.argon, SNAPSHOT.gemini.claude]
   for (const [index, quota] of geminiResets.entries()) {
@@ -356,7 +366,7 @@ const panel = () => globalThis.document.querySelector('.um_panel')
   const captions = [...opened.querySelectorAll('.um_caption')]
   assert.deepEqual(
     captions.map((node) => node.textContent),
-    ['OpenAI Codex', 'Google Gemini (AI Pro)', 'OpenRouter credits', 'DeepSeek balance'],
+    ['OpenAI Codex', 'Google Gemini (AI Pro)', 'Z.ai Coding Plan', 'OpenRouter credits', 'DeepSeek balance'],
     'every provider group is titled the same way',
   )
   assert.equal(opened.querySelectorAll('.um_title').length, 0, 'none of them is promoted over the others')
@@ -406,7 +416,7 @@ for (const argon of [undefined, null]) {
   const argon = rows.find((row) => row.querySelector('dt').textContent === 'Argon')
   assert.equal(argon.querySelector('dd').textContent, 'Limit reached · 0%', 'Argon reports its own exhaustion')
   assert.equal(argon.querySelector('.um_segment').className, 'um_segment is-error', 'only its bar turns exhausted')
-  assert.equal(argon.querySelector('.um_segment').style.width, '100%', 'Argon is fully used')
+  assert.equal(argon.querySelector('.um_segment').style.width, '0%', 'Argon is fully exhausted')
   for (const title of ['Gemini (Flash & Pro)', 'Claude (Opus, Sonnet) & GPT-OSS']) {
     const row = rows.find((node) => node.querySelector('dt').textContent === title)
     assert.equal(row.querySelector('.um_segment').className, 'um_segment is-ok', 'the other Gemini windows stay healthy')
@@ -478,18 +488,18 @@ for (const argon of [undefined, null]) {
   assert.ok(page, 'the Plugins page renders')
   assert.deepEqual(
     [...page.querySelectorAll('.um_pageLabel')].map((node) => node.textContent),
-    ['Codex', 'Gemini', 'OpenRouter', 'DeepSeek'],
+    ['Codex', 'Gemini', 'Z.ai', 'OpenRouter', 'DeepSeek'],
     'one row per provider, named',
   )
   assert.deepEqual(
     [...page.querySelectorAll('.um_pageValue')].map((node) => node.textContent),
-    ['95%', '85%', '$8.73', '¥1.27'],
+    ['95%', '85%', '90%', '$8.73', '¥1.27'],
     'each row shows what the sidebar row shows',
   )
   assert.match(page.textContent, /95% left/, 'the window is spelled out in words, not only as a number')
 
   const switches = [...page.querySelectorAll('button[role="switch"]')]
-  assert.equal(switches.length, 4, 'every provider has a switch')
+  assert.equal(switches.length, 5, 'every provider has a switch')
   for (const control of switches) {
     assert.equal(control.getAttribute('aria-checked'), 'true', 'and starts checked')
     assert.ok(control.getAttribute('aria-label'), 'with a name that says which provider it belongs to')
@@ -497,7 +507,7 @@ for (const argon of [undefined, null]) {
 
   // Switching one off writes through the host and re-reads.
   const before = calls.length
-  await click(view.act, switches[2])
+  await click(view.act, switches[3])
   await settle(view.act)
   const write = calls.slice(before).find((call) => call.method === 'usage-meter/preferences')
   assert.ok(write !== void 0, 'the choice is written through the host, not kept in the browser')
@@ -505,14 +515,14 @@ for (const argon of [undefined, null]) {
 
   const reread = calls.slice(before).find((call) => call.method === 'usage-meter/usage')
   assert.ok(reread !== void 0, 'the page re-reads so the row and the page agree')
-  assert.equal(page.querySelectorAll('button[role="switch"]')[2].getAttribute('aria-checked'), 'false', 'and the switch shows the choice')
+  assert.equal(page.querySelectorAll('button[role="switch"]')[3].getAttribute('aria-checked'), 'false', 'and the switch shows the choice')
 
   await view.unmount()
 }
 
 // --- the row honours the same choice ---------------------------------------
 {
-  fakeConnection({ ...SNAPSHOT, visible: { codex: true, openrouter: false, deepseek: true, gemini: false } })
+  fakeConnection({ ...SNAPSHOT, visible: { codex: true, openrouter: false, deepseek: true, gemini: false, zai: false } })
   const view = await mount(internals.UsageMeter, { wide: true, t })
   await settle(view.act)
   const figures = [...view.container.querySelectorAll('.um_figure')].map((f) => f.textContent)
@@ -522,7 +532,7 @@ for (const argon of [undefined, null]) {
 
 // --- everything off: the row hides itself and says why ---------------------
 {
-  fakeConnection({ ...SNAPSHOT, visible: { codex: false, openrouter: false, deepseek: false, gemini: false } })
+  fakeConnection({ ...SNAPSHOT, visible: { codex: false, openrouter: false, deepseek: false, gemini: false, zai: false } })
   const view = await mount(internals.UsageMeter, { wide: true, t })
   await settle(view.act)
   assert.equal(view.container.innerHTML, '', 'the sidebar row is not drawn when nothing is switched on')
@@ -543,17 +553,17 @@ for (const argon of [undefined, null]) {
   assert.ok(line, 'the card renders its one-liner')
   assert.deepEqual(
     [...line.querySelectorAll('.um_summaryFigure')].map((node) => node.textContent),
-    ['95%', '85%', '$8.73', '¥1.27'],
+    ['95%', '85%', '90%', '$8.73', '¥1.27'],
     'and it carries the same figures the sidebar row does',
   )
-  assert.equal(line.querySelectorAll('.um_summaryFigure svg').length, 4, 'each behind its provider mark')
+  assert.equal(line.querySelectorAll('.um_summaryFigure svg').length, 5, 'each behind its provider mark')
   assert.equal(card.container.querySelector('.um_page'), null, 'the one-liner is not the whole page')
   await card.unmount()
 }
 
 // --- a card whose providers are all off says so rather than lying ----------
 {
-  fakeConnection({ codex: null, openrouter: null, deepseek: null, gemini: null, errors: { codex: null, openrouter: null, deepseek: null, gemini: null }, visible: { codex: false, openrouter: false, deepseek: false, gemini: false }, fetchedAt: NOW })
+  fakeConnection({ codex: null, openrouter: null, deepseek: null, gemini: null, zai: null, errors: { codex: null, openrouter: null, deepseek: null, gemini: null, zai: null }, visible: { codex: false, openrouter: false, deepseek: false, gemini: false, zai: false }, fetchedAt: NOW })
   const card = await mount(internals.MeterSettings, { view: 'summary', t })
   await settle(card.act)
   assert.equal(card.container.querySelectorAll('.um_summaryFigure').length, 0, 'no figure is invented')

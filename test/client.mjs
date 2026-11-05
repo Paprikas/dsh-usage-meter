@@ -444,6 +444,68 @@ for (const argon of [undefined, null]) {
   await view.unmount()
 }
 
+// --- a touch tap opens the panel on the first click --------------------------
+{
+  fakeConnection()
+  const view = await mount(internals.UsageMeter, { wide: true, t })
+  await settle(view.act)
+  const badge = view.container.querySelector('.um_badge')
+
+  // Touch has no hover: the synthesized enter must not schedule the delayed
+  // open, or a resting finger would open the panel before its own click.
+  await view.act(async () => {
+    badge.dispatchEvent(
+      new globalThis.window.PointerEvent('pointerover', {
+        bubbles: true,
+        cancelable: true,
+        relatedTarget: null,
+        pointerType: 'touch',
+      }),
+    )
+    await new Promise((resolve) => setTimeout(resolve, 320))
+  })
+  assert.equal(panel(), null, 'a touch enter schedules no hover open')
+
+  // The tap's focus side effect opens the panel, and the click that follows in
+  // the same tap must pin it — not toggle it shut again, which is what made
+  // the first tap on a phone look dead.
+  await view.act(async () => {
+    badge.dispatchEvent(new globalThis.window.FocusEvent('focusin', { bubbles: true }))
+  })
+  assert.ok(panel(), 'the focus side of a tap opens the panel')
+
+  await click(view.act, badge)
+  assert.ok(panel(), 'the click of the same tap keeps it open')
+  assert.equal(badge.getAttribute('aria-expanded'), 'true', 'and the pinned row announces it')
+
+  await click(view.act, badge)
+  assert.equal(panel(), null, 'the next tap closes it')
+
+  await view.unmount()
+}
+
+// --- a click on a hover-opened panel pins it instead of closing ---------------
+{
+  fakeConnection()
+  const view = await mount(internals.UsageMeter, { wide: true, t })
+  await settle(view.act)
+  const badge = view.container.querySelector('.um_badge')
+
+  await hover(view.act, badge)
+  await view.act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 320))
+  })
+  assert.ok(panel(), 'the hover opened the panel')
+
+  await click(view.act, badge)
+  assert.ok(panel(), 'clicking a hover-opened panel pins it, it does not close it')
+
+  await click(view.act, badge)
+  assert.equal(panel(), null, 'and the second click closes it')
+
+  await view.unmount()
+}
+
 // --- a provider that is not configured leaves no row -----------------------
 {
   fakeConnection({ codex: null, openrouter: null, deepseek: null, errors: { codex: null, openrouter: null, deepseek: null }, fetchedAt: NOW })
